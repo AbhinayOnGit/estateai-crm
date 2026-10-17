@@ -1836,7 +1836,12 @@ function buildSampleOps(DB, S, projInfo, campByKey) {
     const unit = DB.units.find(u => u.project === E.project && u.status === 'Available' && u.config === want) || DB.units.find(u => u.project === E.project && u.status === 'Available');
     const B = {id: 'BK-' + String(++bn).padStart(4, '0'), leadId: E.id, lead: E, project: E.project, builder: E.builder, tower: unit ? unit.tower : '—', unit: unit ? unit.unitNo : '—', unitId: unit ? unit.id : null,
       exec: E.owner, bookingDate: bDate, value: isNaN(E.value) ? (unit ? unit.allIn : NaN) : E.value, status: 'Confirmed'};
-    if (unit) { unit.status = 'Sold'; unit.bookingId = B.id; }
+    /* lifecycle (modelled on the booking-form fields seen in the reference CRM schema): posting date is when the booking was recorded, validation is the back-office check, cancelledDate marks a cancelled booking */
+    B.postingDate = bDate + Math.round(r() * 4) * DAY;
+    const vr = r(); B.validation = (NOW - B.postingDate) / DAY < 2 ? 'Pending' : vr < 0.9 ? 'Validated' : vr < 0.96 ? 'Pending' : 'Rejected';
+    B.cancelledDate = null;
+    if (r() < 0.06 && (NOW - bDate) / DAY > 5) { B.status = 'Cancelled'; B.cancelledDate = bDate + Math.round(2 + r() * 3) * DAY; }
+    if (unit && B.status !== 'Cancelled') { unit.status = 'Sold'; unit.bookingId = B.id; }
     DB.bookings.push(B); E.booking = B;
     DB.eois.push({id: 'EOI-' + String(++en).padStart(4, '0'), leadId: E.id, lead: E, project: E.project, exec: E.owner, date: bDate - Math.round(3 + r() * 7) * DAY, amount: Math.round(2 + r() * 3) * 1e5, status: 'Converted'});
     const pct = brokerage(E.builder), av = B.value, exp = Math.round(av * pct / 100);
@@ -2009,7 +2014,8 @@ function ctxFor(F, range) {
     camps, spendRows: DB.spend.filter(r => cset.has(r.cid) && inR(r.d + 12 * HOUR - 330 * MIN)),
     spendNA: salesFiltered(F),
     visits: DB.visits.filter(V => leadDimOK(Object.assign({}, V.lead, {owner: V.exec, project: F.project && V.projects.includes(F.project) ? F.project : V.lead.project}), F)),
-    bookings: DB.bookings.filter(B => leadDimOK(B.lead, F) && inR(B.bookingDate)),
+    bookings: DB.bookings.filter(B => B.status !== 'Cancelled' && leadDimOK(B.lead, F) && inR(B.bookingDate)),
+    cancelledBookings: DB.bookings.filter(B => B.status === 'Cancelled' && leadDimOK(B.lead, F) && inR(B.cancelledDate)),
     eois: DB.eois.filter(x => leadDimOK(x.lead, F) && inR(x.date)),
     churn: DB.churn.filter(x => leadDimOK(x.lead, F) && inR(x.at)),
     wa: DB.wa.filter(x => { const E = DB.byId.get(x.leadId); return E && leadDimOK(E, F) && inR(x.sentAt); }),
@@ -2058,8 +2064,9 @@ defK('visits_planned', {l: 'Visits planned', kind: 'Activity', unit: 'count', de
 defK('site_visit_rate', {l: 'Site visit rate', kind: 'Cohort', unit: 'pct', target: 25, def: 'Leads created in range that reached Site visit done ÷ qualified leads created in range × 100.', f: c => pctOf(c.cohort.filter(E => E.reach >= 6).length, K('qualified', c))});
 defK('visit_to_book', {l: 'Visit → booking', kind: 'Cohort', unit: 'pct', target: 15, def: 'Booked leads that had a completed visit ÷ leads with a completed visit (leads created in range) × 100.', f: c => { const v = c.cohort.filter(E => E.reach >= 6); return pctOf(v.filter(E => E.stage === 'Booked').length, v.length); }});
 defK('lead_to_book', {l: 'Lead → booking', kind: 'Cohort', unit: 'pct', def: 'Leads created in range that booked ÷ CRM leads × 100 (BOOKED_COHORT ÷ CRM leads).', f: c => pctOf(K('booked_cohort', c), K('crm_leads', c))});
-defK('bookings', {l: 'Bookings', kind: 'Activity', unit: 'count', def: 'BOOKINGS_ACTIVITY: confirmed bookings dated inside the range, whenever the lead was created.', f: c => c.bookings.length});
+defK('bookings', {l: 'Bookings', kind: 'Activity', unit: 'count', def: 'BOOKINGS_ACTIVITY: bookings dated inside the range, whenever the lead was created. Cancelled bookings are excluded (see Booking cancellation %).', f: c => c.bookings.length});
 defK('booked_cohort', {l: 'Booked (cohort)', kind: 'Cohort', unit: 'count', def: 'BOOKED_COHORT: leads created inside the range that have booked so far.', f: c => c.cohort.filter(E => E.stage === 'Booked').length});
+defK('booking_cancel_pct', {l: 'Booking cancellation %', kind: 'Activity', unit: 'pct', good: 'down', def: 'Bookings cancelled inside the range ÷ (confirmed bookings dated inside the range + bookings cancelled inside the range) × 100. Numerator and denominator are booking counts, not unique leads; the cancel date and booking date are independent, so a booking cancelled in range may have been made earlier.', f: c => pctOf(c.cancelledBookings.length, c.bookings.length + c.cancelledBookings.length)});
 defK('booking_value', {l: 'Booking value', kind: 'Activity', unit: 'inr', field: 'booking', def: 'Σ agreement value of bookings dated inside the range.', f: c => sum(c.bookings, B => isNaN(B.value) ? 0 : B.value)});
 defK('revenue', {l: 'Revenue (brokerage)', kind: 'Activity', unit: 'inr', field: 'revenue', def: 'Σ expected brokerage (agreement value × brokerage %) on bookings dated inside the range.', f: c => sum(c.revenue, R => R.expected)});
 defK('collected', {l: 'Collected', kind: 'Activity', unit: 'inr', field: 'revenue', def: 'Σ brokerage collected on dates inside the range (net realised revenue).', f: c => sum(c.collections, R => R.collected)});
@@ -2147,6 +2154,11 @@ function dataQuality() {
   add('no-owner', 'Open leads without owner', 'High', L.filter(E => E.isOpen && E.unassigned), 'Assign from the lead queue.', 'lead-queue');
   add('stale', 'Stale open leads (no activity 14+ days)', 'Medium', L.filter(E => E.isOpen && E.stage !== 'Nurture' && E.lastAct != null && DB.NOW - E.lastAct > 14 * DAY), 'Re-engage or move to nurture.', 'lead-monitoring');
   add('impossible', 'Impossible dates', 'High', L.filter(E => (E.lastAct && E.createdAt && E.lastAct < dayStart(E.createdAt)) || (E.createdAt && E.createdAt > DB.NOW + DAY)), 'Correct timestamps at source.', 'lead-explorer');
+  const BK = DB.bookings.filter(B => B.status !== 'Cancelled');
+  add('bk-unvalidated', 'Bookings not validated after 3+ days', 'Medium', BK.filter(B => B.validation !== 'Validated' && B.postingDate && DB.NOW - B.postingDate > 3 * DAY), 'Back-office to validate or reject the booking.', 'booking-list');
+  add('bk-posting-lag', 'Bookings posted 3+ days after booking date', 'Low', BK.filter(B => B.postingDate && B.postingDate - B.bookingDate > 3 * DAY), 'Post bookings on the day; late posting shifts reports between periods.', 'booking-list');
+  add('bk-posting-order', 'Booking posted before it was booked', 'High', BK.filter(B => B.postingDate && B.postingDate < B.bookingDate), 'Correct the booking or posting date.', 'booking-list');
+  add('visit-sameday', 'Same client, several visit records on one day', 'Medium', (() => { const g = groupBy(DB.visits.filter(v => v.completedAt && v.lead), v => v.lead.id + '|' + dayStart(v.completedAt)); return [...g.values()].filter(a => a.length > 1).flatMap(a => a.map(v => v.lead)); })(), 'Record one visit listing every project seen that day.', 'visits-multi');
   add('no-value', 'Bookings missing value', 'High', DB.bookings.filter(B => !(B.value > 0)), 'Enter agreement value.', 'booking-list');
   add('no-outcome', 'Completed visits missing outcome', 'Medium', DB.visits.filter(V => V.status === 'Completed' && (!V.outcome || V.outcome === '—' || V.outcome === 'Pending')), 'Record visit outcome.', 'visit-records');
   const pn = uniq(L.map(E => E.project)); const conf = pn.filter(a => pn.some(b => b !== a && b.toLowerCase().replace(/[^a-z0-9]/g, '') === a.toLowerCase().replace(/[^a-z0-9]/g, '')));
@@ -3194,7 +3206,7 @@ PAGES['unit-availability'] = c => {
 PAGES['price-intel'] = c => frame({title: 'Price & market intelligence', desc: 'Researched public data for Sector 150 Noida and Golf Course Extension Road (RERA checks, prices with confidence, conflicts). This is real market data, separate from the workspace’s own projects. Load the weekly scan JSON here.', srcs: [], body: ''});
 
 /* ---------- bookings & revenue ---------- */
-const bkCols = () => [cTxt('id', 'Booking'), cLead(), cTxt('project', 'Project'), cTxt('tower', 'Tower'), cTxt('unit', 'Unit'), cOwner('exec', 'Executive'), cDay('bookingDate', 'Booked on'), cInr('value', 'Agreement value', 'booking'), {k: 'ch', l: 'Source', al: 'l', v: r => r.lead.channel}, {k: 'camp', l: 'Campaign', al: 'l', v: r => r.lead.campaign}, cTxt('status', 'Status')];
+const bkCols = () => [cTxt('id', 'Booking'), cLead(), cTxt('project', 'Project'), cTxt('tower', 'Tower'), cTxt('unit', 'Unit'), cOwner('exec', 'Executive'), cDay('bookingDate', 'Booked on'), cDay('postingDate', 'Posted on'), cTxt('validation', 'Validation'), cInr('value', 'Agreement value', 'booking'), {k: 'ch', l: 'Source', al: 'l', v: r => r.lead.channel}, {k: 'camp', l: 'Campaign', al: 'l', v: r => r.lead.campaign}, cTxt('status', 'Status')];
 PAGES.bookings = c => {
   const eo = c.eois; const R = c.revenue;
   const wf = [{l: 'EOI', n: eo.filter(x => x.status !== 'Cancelled').length}, {l: 'Booking', n: c.bookings.length}, {l: 'Unit selected', n: c.bookings.filter(B => B.unit && B.unit !== '—').length}, {l: 'Agreement signed', n: R.filter(r => r.agreement === 'Signed').length}, {l: 'Invoice raised', n: R.filter(r => r.invoiceNo).length}, {l: 'Collected', n: R.filter(r => r.collected > 0).length}];
