@@ -48,3 +48,16 @@ Untested: `booking_cancel_pct` computed value on the UI (only the dictionary ent
 ## 5. Gaps / next actions
 Browser-based UI inspection of LeadSquared (you sign in; I never ask for credentials); report formulas and role scope;
 decide Owner 2 attribution and payout-verification rules; production integration needs separate instruction.
+
+## 6. Browser-session inspection plan (not yet done)
+Needs you to sign in to LeadSquared yourself in a browser session; I never ask for credentials. Read-only, no saved filters/views/reports, no exports.
+1. Lead list: columns, filters, sort, pagination, saved-view names (Observed per screen, with date).
+2. Lead detail: field groups, activity timeline entries, validation messages on duplicates.
+3. Manage Tasks / reminders: due, overdue and completion states.
+4. Reports/dashboards: for each metric record numerator, denominator, date field, timezone, current vs event-time owner, duplicate handling. Mark anything unverifiable as Unavailable.
+5. Roles/permissions screens (view only); untested role behaviour stays "unverified".
+Evidence format: screen, date, category (Observed/Documented/Inferred), limitation. No customer data in captures.
+
+## 7. Added after the first pass
+- Lead drawer: follow-up tasks and notes (type, due date, mark done, overdue state) stored in localStorage only; timeline includes them. Simulated: not shared, not synced, not audited server-side. Tested: add, overdue, complete, persists after reload, invalid date rejected.
+- `site/index.html`: original EstateAI marketing page (own branding and copy; demo form opens a mailto, no server). Checked at 1280px and 390px, no horizontal scroll, no page errors.
