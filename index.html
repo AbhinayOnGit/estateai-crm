@@ -303,6 +303,7 @@ a{color:var(--accent);}
 .score2{text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px;} .score2 b{font-size:26px;color:var(--accent);line-height:1;}
 .kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px 12px;margin:14px 0 0;font-size:13px;} .kv dt{color:var(--text-dim);} .kv dd{margin:0;overflow-wrap:anywhere;}
 .kv.wide{grid-template-columns:minmax(120px,180px) minmax(0,1fr);}
+.fu{list-style:none;padding:0;margin:0 0 8px;} .fu li{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--hair);font-size:12.5px;} .fu-form{display:flex;gap:6px;flex-wrap:wrap;} .fu-form input[type=text]{flex:1;min-width:140px;}
 .tl{list-style:none;padding:0;margin:0;border-left:2px solid var(--border);} .tl li{display:flex;justify-content:space-between;gap:10px;padding:4px 0 4px 12px;position:relative;font-size:12.5px;}
 .tl li::before{content:"";position:absolute;left:-5px;top:10px;width:8px;height:8px;border-radius:50%;background:var(--accent);}
 .nlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;font-size:13px;} .nlist li{padding:8px 10px;border:1px solid var(--border);border-radius:8px;line-height:1.5;} .nlist li.read{opacity:.6;}
@@ -1380,6 +1381,7 @@ function dur(min) {
 function hash(s) { let h = 2166136261; s = String(s); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
 function rng(seed) { let a = hash(seed); return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 const pick = (r, arr) => arr[Math.floor(r() * arr.length) % arr.length];
+const ACTIONS_LATE = {};
 const store = {
   get(k, d) { try { const v = localStorage.getItem('eai.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem('eai.' + k, JSON.stringify(v)); } catch (e) {} },
@@ -2437,10 +2439,32 @@ function renderSearchDrop(q) {
 /* drawer */
 function drawer(html, title) { $('#drawerTitle').textContent = title || ''; $('#drawerBody').innerHTML = html; $('#drawer').hidden = false; $('#scrim').hidden = false; $('#drawerClose').focus(); }
 function closeDrawer() { $('#drawer').hidden = true; $('#scrim').hidden = true; }
+/* Follow-up tasks and notes: stored in this browser's localStorage only (simulated; not synced to any CRM, not shared between users). */
+const TASK_TYPES = ['Call', 'WhatsApp', 'Meeting', 'Site visit', 'Other'];
+const leadTasks = id => store.get('tasks', []).filter(x => x.leadId === id);
+const taskState = (x, now) => x.done ? 'Done' : x.due < now ? 'Overdue' : 'Open';
+function followUpHtml(id) {
+  const now = DB.NOW, list = leadTasks(id).sort((a, b) => a.due - b.due);
+  const day = ms => new Date(ms + 330 * MIN).toISOString().slice(0, 10);
+  return `<h4>Follow-ups &amp; notes <span class="muted">(saved in this browser only)</span></h4>
+    <ul class="fu">${list.map(x => `<li><span><b>${esc(x.type)}</b> · due ${fmtDT(x.due)} ${pill(taskState(x, now) === 'Overdue' ? 'CRITICAL' : taskState(x, now) === 'Done' ? 'HEALTHY' : 'INFO', taskState(x, now))}${x.text ? '<br><span class="muted">' + esc(x.text) + '</span>' : ''}</span>${x.done ? '' : `<button type="button" class="btn xs" data-act="taskdone" data-id="${esc(x.id)}" data-lead="${esc(id)}">Mark done</button>`}</li>`).join('') || '<li class="muted">No follow-ups yet.</li>'}</ul>
+    <div class="fu-form" data-lead-id="${esc(id)}"><select id="fuType" aria-label="Task type">${TASK_TYPES.map(t => `<option>${t}</option>`).join('')}</select><input id="fuDue" type="date" aria-label="Due date" value="${day(now + DAY)}"><input id="fuText" type="text" maxlength="200" placeholder="Note (do not enter real customer data in the showcase)" aria-label="Note"><button type="button" class="btn sm" data-act="taskadd" data-lead="${esc(id)}">Add</button></div>`;
+}
+ACTIONS_LATE.taskadd = t => {
+  const id = t.dataset.lead, due = $('#fuDue').value, text = $('#fuText').value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) { flash(t, 'Pick a due date'); return; }
+  const list = store.get('tasks', []);
+  list.push({id: 't' + Date.now().toString(36) + list.length, leadId: id, type: $('#fuType').value, due: Date.parse(due + 'T18:00:00+05:30'), text, done: false, createdAt: DB.NOW});
+  store.set('tasks', list); audit('Follow-up', 'Task added (simulated, local)', '', id); openLead(id);
+};
+ACTIONS_LATE.taskdone = t => {
+  const list = store.get('tasks', []), x = list.find(y => y.id === t.dataset.id); if (!x) return;
+  x.done = true; x.doneAt = DB.NOW; store.set('tasks', list); audit('Follow-up', 'Task completed (simulated, local)', '', t.dataset.lead); openLead(t.dataset.lead);
+};
 function openLead(id) {
   const E = DB.byId.get(id); if (!E) return;
   const t = [['Captured', E.createdAt], ['Assigned', E.assignedAt], ['First activity', E.firstActAt], ['First human call', E.firstHumanCallAt], ...E.visits.map(V => [`${V.seq} · ${V.status}`, V.completedAt || V.plannedAt]),
-    ...DB.churn.filter(c => c.leadId === id).map(c => [`Reassigned ${c.prevOwner} → ${c.newOwner}`, c.at]), ...(E.booking ? [['Booked ' + E.booking.unit, E.booking.bookingDate]] : []), ['Last activity', E.lastAct], ['Next follow-up', E.nextFu]]
+    ...DB.churn.filter(c => c.leadId === id).map(c => [`Reassigned ${c.prevOwner} → ${c.newOwner}`, c.at]), ...(E.booking ? [['Booked ' + E.booking.unit, E.booking.bookingDate]] : []), ['Last activity', E.lastAct], ['Next follow-up', E.nextFu], ...leadTasks(id).map(x => [`Follow-up · ${x.type}${x.done ? ' (done)' : ''}`, x.done ? x.doneAt : x.due])]
     .filter(x => x[1] != null && !isNaN(x[1])).sort((a, b) => a[1] - b[1]);
   const wa = DB.wa.filter(w => w.leadId === id);
   drawer(`<div class="dl-top"><div><p class="lname big">${sec('pii', E.name)}</p><p class="muted">${esc(E.id)} · ${esc(E.detail)} <span class="muted">(${esc(FUNNEL_L[E.bucket])})</span></p></div>${E.score != null ? `<div class="score2"><b>${E.score}</b>${bandPill(E.band)}</div>` : bandPill(E.band)}</div>
@@ -2452,6 +2476,7 @@ function openLead(id) {
     <h4>Recommended next action</h4><div class="action-box"><b>${esc(E.action.title)}.</b> ${esc(E.action.reason || '')}</div>
     ${E.opener ? `<h4>Suggested opener</h4><textarea id="opener" rows="4">${esc(E.opener)}</textarea><div class="row-btns"><button class="btn sm" type="button" data-copyop>Copy opener</button></div>` : ''}` : ''}
     ${E.notes ? `<h4>Latest note</h4><p class="note">“${esc(E.notes)}”</p>` : ''}
+    ${followUpHtml(id)}
     <h4>Timeline</h4><ol class="tl">${t.map(([l, ts]) => `<li><span>${esc(l)}</span><span class="muted">${fmtDT(ts)}</span></li>`).join('')}</ol>
     ${wa.length ? `<h4>WhatsApp alert to owner</h4><p>${wa.map(w => w.failed ? 'Failed' : [w.delivered && 'Delivered', w.read && 'Read', w.clicked && 'Clicked', w.replied && 'Replied'].filter(Boolean).join(' → ')).join('; ')}</p>` : ''}`, 'Lead');
 }
@@ -2535,7 +2560,7 @@ document.addEventListener('input', e => {
   if (t.dataset.tq) { clearTimeout(tqTimer); const id = t.dataset.tq, v = t.value, pos = t.selectionStart; tqTimer = setTimeout(() => { const s = TS.get(id); s.q = v; s.page = 0; rerender(); const n = document.getElementById('ts-' + id); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (x) {} } }, 220); }
   if (t.id === 'gsearch') renderSearchDrop(t.value);
 });
-const ACTIONS = {}, CHANGES = {};
+const ACTIONS = ACTIONS_LATE, CHANGES = {};
 function switchWs(ws) {
   if (ws !== 'sample') return;   // showcase edition: sample only
   if (ws === APP.ws) return; audit('Workspace', 'Switched workspace', APP.ws, ws); APP.ws = ws; store.set('ws', ws); CTX_CACHE.clear();
