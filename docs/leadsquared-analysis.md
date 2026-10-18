@@ -70,3 +70,14 @@ Observed: LeadSquared's Booking Complete and Site Visit Complete activities carr
 - Booking list shows Owner 2 and their %. Data-quality checks: Owner 2 = primary owner; invalid split.
 - Not done: Owner 2 on site visits and payouts, editing a split in the UI, manager/team rollups of credited figures.
 - Tested (headless Chromium, 42 sample bookings, 7 with Owner 2): credits sum to 42, no same-owner cases, new columns and pages render, no page errors. Untested: date-range filtering of credited figures, role masking of Owner 2.
+
+## 9. Owner 2 on site visits and payouts (Proposed rule, synthetic data)
+Observed: Site Visit Complete has an "Owner 2" field (and Verified For Payout / Cash Payout Done). How reports use them is Unavailable.
+- Completed visits can have `owner2` and `ownerShare`, with the same rule and validation as bookings (shares add to 100 %).
+- The partner payout is paid **once per visit**; Owner 2 does not receive money. Owner 2 only changes who the visit and its payout *cost* are credited to: credited payout cost = share x payout.
+- Executive report: "Credited visits" and "Credited payout cost" beside the primary-owner columns. Visit dashboard "Visits by executive" is credited. Visit payouts page has a cost-by-executive table. Visit lists show Owner 2 (share).
+- Unique visit counts and KPIs (`visits_done`, no-show %, etc.) are unchanged.
+- Data-quality checks: visit Owner 2 equals visit executive; invalid split.
+- Tested (headless Chromium, 142 completed sample visits, 10 with Owner 2): credited visits sum to 142; credited payout cost equals total payout (Rs 117,000); no same-owner cases; no Owner 2 on non-completed visits; pages render with no errors.
+- Untested: date-range filtering of credited figures, role masking of Owner 2, visit-to-booking conversion by credited owner.
+- Not done: editing a split in the UI, manager/team rollups, payout verification rule (still your decision).
