@@ -103,3 +103,14 @@ Observed: Site Visit Complete has a required "Verified For Payout" field plus "C
 - Simulated: actions are stored in this browser only (localStorage), written to the session audit log, and any viewing role can press them. There is no server-enforced separation of duties or permission check.
 - Tested (headless Chromium, 14 payable sample visits): generated data has no unverified approved/paid payouts; Verify then Approve then Mark paid works in order; Approve hidden before Verify; state persists after reload; Reject blocks Approve; a forced invalid step is ignored; DQ checks stay 0; no page errors.
 - Untested: role restrictions on who may verify, date-range filtering, verification by the visit's own executive through the UI (generated data excludes it), undoing a verification.
+
+## 13. LeadSquared roles (Observed via API on 2026-10-18; aggregate counts only)
+Method: read-only `get_users` MCP call. Only role, status and group-membership counts were kept; no names, emails or IDs are recorded here.
+- 2,664 users: Sales_User 2,636 (664 active), Marketing_User 18 (16 active), Administrator 9 (6 active), Sales_Manager 1 (0 active). StatusCode 0 = active.
+- Team structure is carried by **groups**, not roles: 125 distinct groups; 2,008 users in none, 381 in two, 201 in three, up to five. A user can be in several groups (for example a city group plus a manager's team group).
+- No user is flagged as a phone-call agent.
+- Implication for EstateAI (Proposed): the 13 simulated roles are finer than LeadSquared's 4 real roles; manager/team scope in LeadSquared comes from group membership, which is many-to-many. EstateAI team rollups assume one team per executive, so credited/team totals can differ from LeadSquared where a user sits in two groups.
+- About 75% of Sales_User accounts are inactive but still own history; report filters by "current owner" should keep inactive owners visible.
+
+## 14. Still Unavailable (needs you signed in to LeadSquared in a browser)
+Report formulas (numerator, denominator, date field, timezone, owner-at-event vs current owner), what each role can see or edit, how Owner 2 is used in reports, and whether Verified For Payout gates payment. The API exposes none of these and this session has no browser tool, so sections 8 to 12 stay Proposed. The roles permission matrix is likewise Unverified.
