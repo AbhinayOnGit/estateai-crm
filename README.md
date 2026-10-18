@@ -33,3 +33,7 @@ EstateAI CRM is a CRM and BI command centre for real-estate CRM, sales and marke
 ## Tech
 
 A single self-contained HTML file in plain JavaScript, with no framework, build step or backend. Charts are drawn in SVG. Settings are saved in the browser's local storage. Built with Claude.
+
+## Payout API (optional)
+
+Payout verification (Verify / Reject, Approve, Mark paid) can be saved on a server instead of in the browser. `node api/server.js` (Node 22+, no dependencies) serves `index.html` and a small SQLite-backed API on port 8787 (`PORT` and `PAYOUT_DB` override). Steps are checked in order and by role, and each change is written to an audit table. Opened as a plain file or from a static host, the page falls back to browser-only storage. Roles come from the role preview, so this enforces the workflow but is not sign-in. Tests: `node --test api/server.test.js`.

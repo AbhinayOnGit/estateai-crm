@@ -2506,18 +2506,28 @@ ACTIONS_LATE.o2save = t => {
   audit((kind === 'B' ? 'Booking ' : 'Visit ') + id, 'Owner 2 changed (simulated, local)', prev, o2 ? `${o2} (${100 - rec.ownerShare}%)` : 'none');
   CTX_CACHE.clear(); DQ_CACHE = null; openLead(rec.leadId); rerender();
 };
-/* Payout workflow: Not verified -> Verified | Rejected; Verified + Pending -> Approved; Approved -> Paid. Simulated: stored in this browser only, and any viewing role can press the buttons. */
+/* Payout workflow: Not verified -> Verified | Rejected; Verified + Pending -> Approved; Approved -> Paid. Saved by the payout API when the page is served by it; otherwise simulated and stored in this browser only. */
 const PAY_STEPS = {verify: ['Verify', V => V.verification !== 'Verified' && V.payoutStatus !== 'Paid'], reject: ['Reject', V => V.verification === 'Not verified'], approve: ['Approve', V => V.verification === 'Verified' && V.payoutStatus === 'Pending'], pay: ['Mark paid', V => V.payoutStatus === 'Approved']};
-ACTIONS_LATE.payact = t => {
+/* Payout API (api/server.js): when the page is served by it, actions are saved there and loaded back on start. Elsewhere (file, static host) the calls fail and the browser-only path is used. */
+const PAY_API = '/api/payouts';
+const applyPayRecord = r => { const V = DB.visits.find(x => x.id === r.id); if (V && V.payable) Object.assign(V, {verification: r.verification, verifiedBy: r.verifiedBy ? roleName(r.verifiedBy) : V.verifiedBy, verifiedAt: r.verifiedAt || V.verifiedAt, payoutStatus: r.payoutStatus}); };
+function syncPayouts() {
+  return fetch(PAY_API).then(r => r.ok ? r.json() : Promise.reject(r.status)).then(rows => { rows.forEach(applyPayRecord); CTX_CACHE.clear(); DQ_CACHE = null; rerender(); }).catch(() => {});
+}
+ACTIONS_LATE.payact = async t => {
   const V = DB.visits.find(x => x.id === t.dataset.id), step = t.dataset.step; if (!V || !PAY_STEPS[step] || !PAY_STEPS[step][1](V)) return;
-  const prev = V.verification + ' / ' + V.payoutStatus, who = roleName(APP.role) + ' (simulated)';
+  const prev = V.verification + ' / ' + V.payoutStatus, done = how => { audit('Visit ' + V.id, 'Payout ' + PAY_STEPS[step][0].toLowerCase() + ' (' + how + ')', prev, V.verification + ' / ' + V.payoutStatus); CTX_CACHE.clear(); DQ_CACHE = null; rerender(); };
+  let res = null;
+  try { res = await fetch(PAY_API + '/' + encodeURIComponent(V.id) + '/' + step, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({role: APP.role, base: {verification: V.verification, payoutStatus: V.payoutStatus}})}); } catch (e) { res = null; }
+  if (res && res.ok) { applyPayRecord(await res.json()); return done('saved to server'); }
+  if (res && res.headers.get('content-type') === 'application/json') { const err = await res.json().catch(() => ({})); flash(t, err.error || 'Rejected'); if (res.status === 409) syncPayouts(); return; }
+  const who = roleName(APP.role) + ' (simulated)';
   if (step === 'verify') Object.assign(V, {verification: 'Verified', verifiedBy: who, verifiedAt: DB.NOW});
   else if (step === 'reject') Object.assign(V, {verification: 'Rejected', verifiedBy: who, verifiedAt: DB.NOW});
   else if (step === 'approve') V.payoutStatus = 'Approved';
   else V.payoutStatus = 'Paid';
   const ed = store.get('pv', {}); ed[V.id] = {verification: V.verification, verifiedBy: V.verifiedBy, verifiedAt: V.verifiedAt, payoutStatus: V.payoutStatus}; store.set('pv', ed);
-  audit('Visit ' + V.id, 'Payout ' + PAY_STEPS[step][0].toLowerCase() + ' (simulated, local)', prev, V.verification + ' / ' + V.payoutStatus);
-  CTX_CACHE.clear(); DQ_CACHE = null; rerender();
+  done('simulated, local');
 };
 function openLead(id) {
   const E = DB.byId.get(id); if (!E) return;
@@ -2655,8 +2665,9 @@ function boot() {
   document.addEventListener('click', e => { if (!e.target.closest('.search')) $('#searchDrop').hidden = true; });
   $('#bell').addEventListener('click', () => nav('notifications'));
   document.addEventListener('click', e => { if (document.body.classList.contains('side-open') && !e.target.closest('.side,#burger')) closeSideMobile(); });
-  window.addEventListener('estate:data', () => { if (rebuild()) { audit('Workspace', 'Dataset loaded', '', DB.sample ? 'Sample data' : DB.fileName); rerender(); } });
+  window.addEventListener('estate:data', () => { if (rebuild()) { if (/^https?:/.test(location.protocol)) syncPayouts(); audit('Workspace', 'Dataset loaded', '', DB.sample ? 'Sample data' : DB.fileName); rerender(); } });
   rerender();
+  if (/^https?:/.test(location.protocol)) syncPayouts();
 }
 
 /* ================= pages: overview + leads ================= */
