@@ -93,3 +93,13 @@ Observed: Site Visit Complete has an "Owner 2" field (and Verified For Payout / 
 - Team/manager rollups reconcile on the app's own per-executive rows for the default range: 42 bookings = 42.0 credited; 140 visits = 140 credited; booking value Rs 1,377,000,000 = credited value.
 - Visit Owner 2 edit through the lead drawer: saved, persisted after reload; clearing Owner 2 resets it to none / 100 %. No page errors; data-quality Owner 2 checks stay at 0.
 - Still untested: non-default date ranges, role masking of Owner 2, and the same-owner rejection through the UI (the Owner 2 list excludes the primary owner, so that path is only reachable by changing the page).
+
+## 12. Payout verification (Proposed rule, synthetic data)
+Observed: Site Visit Complete has a required "Verified For Payout" field plus "Cash Payout Done" and "Visit Payable Amount". How verification gates payment in LeadSquared is Unavailable, so the workflow below is an EstateAI design to confirm.
+- Each payable completed visit has `verification` (Not verified / Verified / Rejected), `verifiedBy`, `verifiedAt`. Non-payable or non-completed visits: Not applicable.
+- Workflow: Verify or Reject (Not verified); Approve only when Verified and payout Pending; Mark paid only when Approved. Buttons appear only for valid steps, and the handler ignores a forced invalid step.
+- Visit payouts page: Verification column, an action column, "Awaiting verification" and "Rejected" cards. Visit lists have a Verification column (hidden by default in the compact view).
+- Data-quality checks: payout approved/paid without verification; payout verified by the visit's own executive.
+- Simulated: actions are stored in this browser only (localStorage), written to the session audit log, and any viewing role can press them. There is no server-enforced separation of duties or permission check.
+- Tested (headless Chromium, 14 payable sample visits): generated data has no unverified approved/paid payouts; Verify then Approve then Mark paid works in order; Approve hidden before Verify; state persists after reload; Reject blocks Approve; a forced invalid step is ignored; DQ checks stay 0; no page errors.
+- Untested: role restrictions on who may verify, date-range filtering, verification by the visit's own executive through the UI (generated data excludes it), undoing a verification.

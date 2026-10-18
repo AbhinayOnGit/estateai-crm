@@ -1798,6 +1798,12 @@ function buildSampleOps(DB, S, projInfo, campByKey) {
     attendance: '—', outcome: '—', feedback: null, clientRemarks: '', salesRemarks: '', payable: E.channel === 'Channel Partner', payout: NaN, payoutStatus: 'Not payable', liveLocation: 'Not applicable'}, o);
     if (V.payable && V.status === 'Completed') { const r = rng('pay' + V.id); V.payout = Math.round((5000 + r() * 10000) / 500) * 500; V.payoutStatus = pick(r, ['Paid', 'Approved', 'Pending', 'Pending']); }
     else if (!V.payable) V.payoutStatus = 'Not payable'; else V.payoutStatus = 'Not due';
+    /* Payout verification (PROPOSED rule; the reference CRM has a "Verified For Payout" field but how it gates payment was not verifiable): a payable visit must be Verified before its payout can be Approved, and Approved before it is Paid. */
+    V.verification = V.payable && V.status === 'Completed' ? 'Not verified' : 'Not applicable'; V.verifiedBy = null; V.verifiedAt = null;
+    if (V.verification === 'Not verified') {
+      const rv = rng('ver' + V.id), vp = DB.users.filter(u => ['finance', 'mis', 'crm_mgr'].includes(u.role) && u.name !== V.exec);
+      if ((V.payoutStatus === 'Paid' || V.payoutStatus === 'Approved' || rv() < 0.4) && vp.length) { V.verification = 'Verified'; V.verifiedBy = vp[Math.floor(rv() * vp.length)].name; V.verifiedAt = V.completedAt + Math.round(1 + rv() * 2) * DAY; }
+    }
     /* Owner 2 on a visit: same PROPOSED rule as bookings. The payout is paid once, to the channel partner; Owner 2 only changes which executive the visit and its payout cost are credited to. */
     V.owner2 = null; V.ownerShare = 100;
     if (V.status === 'Completed') { const r2 = rng('o2' + V.id), pool = DB.users.filter(u => u.role === 'sales_exec' && u.name !== V.exec); if (pool.length && r2() < 0.1) { V.owner2 = pool[Math.floor(r2() * pool.length)].name; V.ownerShare = [50, 50, 60, 70][Math.floor(r2() * 4)]; } }
@@ -2167,6 +2173,8 @@ function dataQuality() {
   add('bk-unvalidated', 'Bookings not validated after 3+ days', 'Medium', BK.filter(B => B.validation !== 'Validated' && B.postingDate && DB.NOW - B.postingDate > 3 * DAY), 'Back-office to validate or reject the booking.', 'booking-list');
   add('bk-posting-lag', 'Bookings posted 3+ days after booking date', 'Low', BK.filter(B => B.postingDate && B.postingDate - B.bookingDate > 3 * DAY), 'Post bookings on the day; late posting shifts reports between periods.', 'booking-list');
   const VD = DB.visits.filter(v => v.status === 'Completed');
+  add('payout-unverified', 'Payout approved or paid without verification', 'High', VD.filter(v => v.payable && ['Approved', 'Paid'].includes(v.payoutStatus) && v.verification !== 'Verified').map(v => v.lead), 'Verify the visit first, or reverse the payout.', 'visit-payouts');
+  add('payout-self-verified', 'Payout verified by the visit executive', 'High', VD.filter(v => v.verifiedBy && v.verifiedBy === v.exec).map(v => v.lead), 'Verification must come from someone other than the visit executive.', 'visit-payouts');
   add('visit-owner2-same', 'Visit Owner 2 is the same as the visit executive', 'High', VD.filter(v => v.owner2 && v.owner2 === v.exec).map(v => v.lead), 'Pick a different executive for Owner 2 or clear it.', 'visit-records');
   add('visit-owner2-split', 'Visit owner share outside 1–99 % with an Owner 2', 'High', VD.filter(v => v.owner2 && !(v.ownerShare >= 1 && v.ownerShare <= 99)).map(v => v.lead), 'Set a valid split.', 'visit-records');
   add('bk-owner2-same', 'Owner 2 is the same as the primary owner', 'High', BK.filter(B => B.owner2 && B.owner2 === B.exec), 'Pick a different executive for Owner 2 or clear it.', 'booking-list');
@@ -2478,6 +2486,10 @@ function applyO2Edits() {
   const ed = store.get('o2', {});
   for (const [k, v] of Object.entries(ed)) { const [kind, id] = k.split(':'); const rec = (kind === 'B' ? DB.bookings : DB.visits).find(x => x.id === id); if (rec) { rec.owner2 = v.owner2; rec.ownerShare = v.ownerShare; } }
 }
+function applyPayEdits() {
+  const ed = store.get('pv', {});
+  for (const [id, v] of Object.entries(ed)) { const rec = DB.visits.find(x => x.id === id); if (rec && rec.payable) Object.assign(rec, v); }
+}
 const o2Pool = rec => DB.users.filter(u => u.role === 'sales_exec' && u.name !== rec.exec);
 function o2Html(kind, rec, label) {
   const sel = rec.owner2 || '';
@@ -2493,6 +2505,19 @@ ACTIONS_LATE.o2save = t => {
   const ed = store.get('o2', {}); ed[kind + ':' + id] = {owner2: rec.owner2, ownerShare: rec.ownerShare}; store.set('o2', ed);
   audit((kind === 'B' ? 'Booking ' : 'Visit ') + id, 'Owner 2 changed (simulated, local)', prev, o2 ? `${o2} (${100 - rec.ownerShare}%)` : 'none');
   CTX_CACHE.clear(); DQ_CACHE = null; openLead(rec.leadId); rerender();
+};
+/* Payout workflow: Not verified -> Verified | Rejected; Verified + Pending -> Approved; Approved -> Paid. Simulated: stored in this browser only, and any viewing role can press the buttons. */
+const PAY_STEPS = {verify: ['Verify', V => V.verification !== 'Verified' && V.payoutStatus !== 'Paid'], reject: ['Reject', V => V.verification === 'Not verified'], approve: ['Approve', V => V.verification === 'Verified' && V.payoutStatus === 'Pending'], pay: ['Mark paid', V => V.payoutStatus === 'Approved']};
+ACTIONS_LATE.payact = t => {
+  const V = DB.visits.find(x => x.id === t.dataset.id), step = t.dataset.step; if (!V || !PAY_STEPS[step] || !PAY_STEPS[step][1](V)) return;
+  const prev = V.verification + ' / ' + V.payoutStatus, who = roleName(APP.role) + ' (simulated)';
+  if (step === 'verify') Object.assign(V, {verification: 'Verified', verifiedBy: who, verifiedAt: DB.NOW});
+  else if (step === 'reject') Object.assign(V, {verification: 'Rejected', verifiedBy: who, verifiedAt: DB.NOW});
+  else if (step === 'approve') V.payoutStatus = 'Approved';
+  else V.payoutStatus = 'Paid';
+  const ed = store.get('pv', {}); ed[V.id] = {verification: V.verification, verifiedBy: V.verifiedBy, verifiedAt: V.verifiedAt, payoutStatus: V.payoutStatus}; store.set('pv', ed);
+  audit('Visit ' + V.id, 'Payout ' + PAY_STEPS[step][0].toLowerCase() + ' (simulated, local)', prev, V.verification + ' / ' + V.payoutStatus);
+  CTX_CACHE.clear(); DQ_CACHE = null; rerender();
 };
 function openLead(id) {
   const E = DB.byId.get(id); if (!E) return;
@@ -2602,7 +2627,7 @@ function switchWs(ws) {
 }
 /* ---------------- boot ---------------- */
 function rebuild() {
-  try { DB = buildDB(); applyO2Edits(); DB.stamp = Date.now(); DB.minCreated = Math.min(...DB.leads.map(E => E.createdAt).filter(x => x != null)); CTX_CACHE.clear(); DQ_CACHE = null; }
+  try { DB = buildDB(); applyO2Edits(); applyPayEdits(); DB.stamp = Date.now(); DB.minCreated = Math.min(...DB.leads.map(E => E.createdAt).filter(x => x != null)); CTX_CACHE.clear(); DQ_CACHE = null; }
   catch (e) { console.error(e); $('#view').innerHTML = errorState('Lead data could not be loaded. ' + (e.message || ''), e.ref || 'DATA-CRM-204'); return false; }
   const F0 = {preset: DEFAULT_PRESET, from: '', to: ''}; FILTER_KEYS.forEach(k => { F0[k] = ''; });
   APP.F = Object.assign(F0, store.get('filters', {}));
@@ -3168,8 +3193,8 @@ const visitCols = () => [{k: 'id', l: 'Visit', al: 'l', v: r => r.id, f: r => `<
   {k: 'status', l: 'Status', al: 'l', v: r => r.status, f: r => pill({Completed: 'GOOD', Planned: 'INFO', 'No-show': 'POOR', Cancelled: 'WATCH'}[r.status] || 'NO DATA', r.status)}, cDate('plannedAt', 'Planned for'), cDate('completedAt', 'Completed'), cTxt('attendance', 'Attendance'), cTxt('liveLocation', 'Live location'),
   {k: 'feedback', l: 'Feedback', v: r => r.feedback, f: r => r.feedback ? '★'.repeat(r.feedback) + '<span class="muted">' + '★'.repeat(5 - r.feedback) + '</span>' : '—'}, cTxt('clientRemarks', 'Client remarks'), cTxt('salesRemarks', 'Sales remarks'), cTxt('outcome', 'Result'),
   {k: 'eoi', l: 'EOI', al: 'l', v: r => DB.eois.some(x => x.leadId === r.leadId && x.status !== 'Cancelled') ? 'Yes' : 'No'}, {k: 'bk', l: 'Booking', al: 'l', v: r => r.lead.booking ? r.lead.booking.id : '—'},
-  {k: 'payable', l: 'Payable', al: 'l', v: r => r.payable == null ? 'Not recorded' : r.payable ? 'Payable' : 'Non-payable'}, cInr('payout', 'Payout', 'revenue'), cTxt('payoutStatus', 'Payout status')];
-const VIS_HIDE = ['attendance', 'liveLocation', 'clientRemarks', 'eoi', 'bk', 'payable', 'payout', 'payoutStatus', 'completedAt'];
+  {k: 'payable', l: 'Payable', al: 'l', v: r => r.payable == null ? 'Not recorded' : r.payable ? 'Payable' : 'Non-payable'}, cInr('payout', 'Payout', 'revenue'), cTxt('payoutStatus', 'Payout status'), {k: 'verification', l: 'Verification', al: 'l', v: r => r.verification, f: r => r.verification === 'Not applicable' ? '<span class="muted">—</span>' : pill({Verified: 'GOOD', Rejected: 'POOR', 'Not verified': 'WATCH'}[r.verification] || 'NO DATA', r.verification) + (r.verifiedBy ? '<br><span class="muted">' + esc(r.verifiedBy) + '</span>' : '')}];
+const VIS_HIDE = ['attendance', 'liveLocation', 'clientRemarks', 'eoi', 'bk', 'payable', 'payout', 'payoutStatus', 'verification', 'completedAt'];
 PAGES.visits = c => {
   const V = c.visits.filter(v => c.inR(v.plannedAt) || c.inR(v.completedAt)), done = V.filter(v => v.status === 'Completed');
   const p = done.filter(v => v.payable), np = done.filter(v => v.payable === false);
@@ -3195,10 +3220,10 @@ PAGES['visits-completed'] = visitList('Completed visits', 'Completed in the sele
 PAGES['visits-revisits'] = visitList('Revisits', 'Second and later visits by the same client, in range.', c => v => v.seq === 'Revisit' && c.inR(v.completedAt));
 PAGES['visits-multi'] = visitList('Multiple-project visits', 'One visit covering more than one project on the same day.', c => v => v.projects.length > 1 && (c.inR(v.plannedAt) || c.inR(v.completedAt)));
 PAGES['visit-payouts'] = c => { const rows = c.visits.filter(v => v.status === 'Completed' && c.inR(v.completedAt) && v.payable);
-  return frame({title: 'Visit payouts', desc: 'Channel-partner visit payouts: payable visits, amounts and payment status.', srcs: ['leadsquared', 'finance'],
-    body: statRow([statCard('Payable visits', nIN(rows.length), 'In range'), statCard('Paid', sec('revenue', sum(rows.filter(v => v.payoutStatus === 'Paid'), v => v.payout || 0), inr), nIN(rows.filter(v => v.payoutStatus === 'Paid').length) + ' visits'), statCard('Approved, unpaid', sec('revenue', sum(rows.filter(v => v.payoutStatus === 'Approved'), v => v.payout || 0), inr), ''), statCard('Pending approval', sec('revenue', sum(rows.filter(v => v.payoutStatus === 'Pending'), v => v.payout || 0), inr), '', rows.some(v => v.payoutStatus === 'Pending') ? 'WATCH' : null)]) +
+  return frame({title: 'Visit payouts', desc: 'Channel-partner visit payouts: payable visits, amounts and payment status. A payout must be verified before it is approved, and approved before it is paid (proposed rule).', srcs: ['leadsquared', 'finance'],
+    body: statRow([statCard('Payable visits', nIN(rows.length), 'In range'), statCard('Paid', sec('revenue', sum(rows.filter(v => v.payoutStatus === 'Paid'), v => v.payout || 0), inr), nIN(rows.filter(v => v.payoutStatus === 'Paid').length) + ' visits'), statCard('Approved, unpaid', sec('revenue', sum(rows.filter(v => v.payoutStatus === 'Approved'), v => v.payout || 0), inr), ''), statCard('Pending approval', sec('revenue', sum(rows.filter(v => v.payoutStatus === 'Pending'), v => v.payout || 0), inr), '', rows.some(v => v.payoutStatus === 'Pending') ? 'WATCH' : null), statCard('Awaiting verification', nIN(rows.filter(v => v.verification === 'Not verified').length), 'Cannot be approved yet', rows.some(v => v.verification === 'Not verified') ? 'WATCH' : null), statCard('Rejected', nIN(rows.filter(v => v.verification === 'Rejected').length), '')]) +
       section('Payout cost credited to executives', `<p class="muted">The partner is paid once per visit. Where a visit has an Owner 2, its payout cost is shared by owner share; rows add up to the total above.</p>` + table('payout-by-exec', [cTxt('k', 'Executive'), {k: 'n', l: 'Credited visits', al: 'r', v: r => r.n, f: r => (Math.round(r.n * 10) / 10).toString()}, cInr('cost', 'Credited payout cost', 'revenue')], DB.execs.map(e => { const a = rows.filter(v => v.exec === e || v.owner2 === e); return {k: secPlain('owner', e), n: sum(a, v => bkShare(v, e)), cost: sum(a, v => bkShare(v, e) * (v.payout || 0))}; }).filter(r => r.n), {sort: 'cost', noun: 'executives'})) +
-      table('payouts', visitCols(), rows, {lead: r => r.leadId, key: r => r.id, sort: 'completedAt', noun: 'visits', hidden: ['feedback', 'clientRemarks', 'salesRemarks', 'liveLocation', 'attendance', 'eoi', 'seq']})}); };
+      table('payouts', visitCols().concat([{k: 'act', l: 'Action (simulated)', al: 'l', f: r => Object.entries(PAY_STEPS).filter(([, st]) => st[1](r)).map(([k, st]) => `<button type="button" class="btn xs" data-act="payact" data-step="${k}" data-id="${esc(r.id)}">${st[0]}</button>`).join(' ') || '<span class="muted">—</span>', csv: () => ''}]), rows, {lead: r => r.leadId, key: r => r.id, sort: 'completedAt', noun: 'visits', hidden: ['feedback', 'clientRemarks', 'salesRemarks', 'liveLocation', 'attendance', 'eoi', 'seq']})}); };
 PAGES['visit-conversion'] = c => {
   const rows = [...groupBy(c.cohort.filter(E => E.reach >= 3), E => E.project)].map(([pn, a]) => { const v = a.filter(E => E.reach >= 6); return {pn, q: a.length, v: v.length, b: v.filter(E => E.stage === 'Booked').length, sv: pctOf(v.length, a.length), vb: pctOf(v.filter(E => E.stage === 'Booked').length, v.length)}; });
   return frame({title: 'Visit conversion', desc: 'Qualified → visited → booked, by project, for leads created in range.', srcs: ['leadsquared'], kpiIds: ['site_visit_rate', 'visit_to_book'],
