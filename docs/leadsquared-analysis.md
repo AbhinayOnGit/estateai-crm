@@ -88,3 +88,8 @@ Observed: Site Visit Complete has an "Owner 2" field (and Verified For Payout / 
 - Tested (headless Chromium): team and manager pages show the new columns; invalid share rejected; valid edit saved, persisted after reload, shown as the Owner 2 percentage in the bookings list; no page errors.
 - Untested: displayed team credited totals summed against the unique total on screen; date-range filtering; role masking; editing a visit (booking path tested); clearing Owner 2 through the UI.
 - Still open: payout verification rule (needs your decision) and the browser-session inspection of LeadSquared (needs you to sign in).
+
+## 11. Follow-up checks on section 10 (executed, headless Chromium, synthetic data)
+- Team/manager rollups reconcile on the app's own per-executive rows for the default range: 42 bookings = 42.0 credited; 140 visits = 140 credited; booking value Rs 1,377,000,000 = credited value.
+- Visit Owner 2 edit through the lead drawer: saved, persisted after reload; clearing Owner 2 resets it to none / 100 %. No page errors; data-quality Owner 2 checks stay at 0.
+- Still untested: non-default date ranges, role masking of Owner 2, and the same-owner rejection through the UI (the Owner 2 list excludes the primary owner, so that path is only reachable by changing the page).
