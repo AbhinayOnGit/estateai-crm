@@ -1843,6 +1843,10 @@ function buildSampleOps(DB, S, projInfo, campByKey) {
     const vr = r(); B.validation = (NOW - B.postingDate) / DAY < 2 ? 'Pending' : vr < 0.9 ? 'Validated' : vr < 0.96 ? 'Pending' : 'Rejected';
     B.cancelledDate = null;
     if (r() < 0.06 && (NOW - bDate) / DAY > 5) { B.status = 'Cancelled'; B.cancelledDate = bDate + Math.round(2 + r() * 3) * DAY; }
+    /* Owner 2 (co-owner credit). Rule is PROPOSED, not observed in the reference CRM: the primary owner keeps `ownerShare` % of the booking, Owner 2 gets the rest; no Owner 2 means 100 % to the primary owner. */
+    B.owner2 = null; B.ownerShare = 100;
+    const pool = DB.users.filter(u => u.role === 'sales_exec' && u.name !== B.exec);
+    if (pool.length && r() < 0.12) { B.owner2 = pool[Math.floor(r() * pool.length)].name; B.ownerShare = [50, 50, 60, 70][Math.floor(r() * 4)]; }
     if (unit && B.status !== 'Cancelled') { unit.status = 'Sold'; unit.bookingId = B.id; }
     DB.bookings.push(B); E.booking = B;
     DB.eois.push({id: 'EOI-' + String(++en).padStart(4, '0'), leadId: E.id, lead: E, project: E.project, exec: E.owner, date: bDate - Math.round(3 + r() * 7) * DAY, amount: Math.round(2 + r() * 3) * 1e5, status: 'Converted'});
@@ -2159,6 +2163,8 @@ function dataQuality() {
   const BK = DB.bookings.filter(B => B.status !== 'Cancelled');
   add('bk-unvalidated', 'Bookings not validated after 3+ days', 'Medium', BK.filter(B => B.validation !== 'Validated' && B.postingDate && DB.NOW - B.postingDate > 3 * DAY), 'Back-office to validate or reject the booking.', 'booking-list');
   add('bk-posting-lag', 'Bookings posted 3+ days after booking date', 'Low', BK.filter(B => B.postingDate && B.postingDate - B.bookingDate > 3 * DAY), 'Post bookings on the day; late posting shifts reports between periods.', 'booking-list');
+  add('bk-owner2-same', 'Owner 2 is the same as the primary owner', 'High', BK.filter(B => B.owner2 && B.owner2 === B.exec), 'Pick a different executive for Owner 2 or clear it.', 'booking-list');
+  add('bk-owner2-split', 'Owner share outside 1–99 % with an Owner 2', 'High', BK.filter(B => B.owner2 && !(B.ownerShare >= 1 && B.ownerShare <= 99)), 'Set a valid split.', 'booking-list');
   add('bk-posting-order', 'Booking posted before it was booked', 'High', BK.filter(B => B.postingDate && B.postingDate < B.bookingDate), 'Correct the booking or posting date.', 'booking-list');
   add('visit-sameday', 'Same client, several visit records on one day', 'Medium', (() => { const g = groupBy(DB.visits.filter(v => v.completedAt && v.lead), v => v.lead.id + '|' + dayStart(v.completedAt)); return [...g.values()].filter(a => a.length > 1).flatMap(a => a.map(v => v.lead)); })(), 'Record one visit listing every project seen that day.', 'visits-multi');
   add('no-value', 'Bookings missing value', 'High', DB.bookings.filter(B => !(B.value > 0)), 'Enter agreement value.', 'booking-list');
@@ -3049,14 +3055,17 @@ PAGES['allocation-insights'] = c => {
 };
 
 /* ---------- sales ---------- */
+const bkShare = (B, e) => (B.exec === e ? (B.owner2 ? B.ownerShare : 100) : 0) / 100 + (B.owner2 === e ? (100 - B.ownerShare) / 100 : 0);   // fraction of a booking credited to executive e
 function execRow(e, c) {
   const a = c.cohort.filter(E => E.owner === e), g = leadAgg(a), op = c.open.filter(E => E.owner === e);
   const bk = c.bookings.filter(B => B.exec === e), vd = c.visitsDone.filter(V => V.exec === e);
+  const bkAll = c.bookings.filter(B => B.exec === e || B.owner2 === e);
+  const bkCredit = sum(bkAll, B => bkShare(B, e)), valCredit = sum(bkAll, B => bkShare(B, e) * (B.value || 0));
   const val = sum(bk, B => B.value || 0), rev = sum(bk, B => B.rev ? B.rev.expected : 0);
   const wa = c.wa.filter(w => w.exec === e);
   return {e, team: DB.teamOfExec.get(e) || '', mgr: (DB.users.find(u => u.name === e) || {}).manager || '', assigned: a.length, open: op.length, fresh: op.filter(E => E.band === 'FRESH').length, follow: op.filter(E => E.nextFu).length, overdue: op.filter(E => E.overdue).length, past: op.filter(pastSla).length,
     medResp: g.medResp, medHuman: median(a.map(E => E.humanRespMin)), w5: pctOf(callKn(a).filter(E => E.respMin != null && E.respMin <= 5).length, callKn(a).length), w15: pctOf(callKn(a).filter(E => E.respMin != null && E.respMin <= 15).length, callKn(a).length), w30: pctOf(callKn(a).filter(E => E.respMin != null && E.respMin <= 30).length, callKn(a).length), w60: pctOf(callKn(a).filter(E => E.respMin != null && E.respMin <= 60).length, callKn(a).length),
-    interested: g.qual, vplanned: a.filter(E => E.reach >= 5).length, vdone: vd.length, eoi: c.eois.filter(x => x.exec === e).length, bookings: bk.length, l2v: pctOf(g.visit, g.n), v2b: pctOf(a.filter(E => E.reach >= 6 && E.stage === 'Booked').length, g.visit), l2b: pctOf(g.booked, g.n),
+    interested: g.qual, vplanned: a.filter(E => E.reach >= 5).length, vdone: vd.length, eoi: c.eois.filter(x => x.exec === e).length, bookings: bk.length, bkCredit, valCredit, l2v: pctOf(g.visit, g.n), v2b: pctOf(a.filter(E => E.reach >= 6 && E.stage === 'Booked').length, g.visit), l2b: pctOf(g.booked, g.n),
     untouched: pctOf(g.untouched, g.nk), never: pctOf(g.never, g.ak), ni: pctOf(a.filter(E => E.detail === 'Not Interested').length, g.n), lowb: pctOf(a.filter(E => E.detail === 'Low Budget').length, g.n),
     value: val, rev, rpl: ratio(rev, a.length), rpb: ratio(rev, bk.length), chIn: c.churn.filter(x => x.newOwner === e).length, chOut: c.churn.filter(x => x.prevOwner === e).length, chWin: c.churn.filter(x => x.newOwner === e && x.converted).length,
     waSent: wa.length, waDel: wa.filter(w => w.delivered).length, waRead: wa.filter(w => w.read).length, waClick: wa.filter(w => w.clicked).length, waRep: wa.filter(w => w.replied).length};
@@ -3231,7 +3240,7 @@ PAGES['unit-availability'] = c => {
 PAGES['price-intel'] = c => frame({title: 'Price & market intelligence', desc: 'Researched public data for Sector 150 Noida and Golf Course Extension Road (RERA checks, prices with confidence, conflicts). This is real market data, separate from the workspace’s own projects. Load the weekly scan JSON here.', srcs: [], body: ''});
 
 /* ---------- bookings & revenue ---------- */
-const bkCols = () => [cTxt('id', 'Booking'), cLead(), cTxt('project', 'Project'), cTxt('tower', 'Tower'), cTxt('unit', 'Unit'), cOwner('exec', 'Executive'), cDay('bookingDate', 'Booked on'), cDay('postingDate', 'Posted on'), cTxt('validation', 'Validation'), cInr('value', 'Agreement value', 'booking'), {k: 'ch', l: 'Source', al: 'l', v: r => r.lead.channel}, {k: 'camp', l: 'Campaign', al: 'l', v: r => r.lead.campaign}, cTxt('status', 'Status')];
+const bkCols = () => [cTxt('id', 'Booking'), cLead(), cTxt('project', 'Project'), cTxt('tower', 'Tower'), cTxt('unit', 'Unit'), cOwner('exec', 'Executive'), {k: 'o2', l: 'Owner 2 (share)', al: 'l', v: r => r.owner2 || '', f: r => r.owner2 ? `${sec('owner', r.owner2)} (${100 - r.ownerShare}%)` : '—'}, cDay('bookingDate', 'Booked on'), cDay('postingDate', 'Posted on'), cTxt('validation', 'Validation'), cInr('value', 'Agreement value', 'booking'), {k: 'ch', l: 'Source', al: 'l', v: r => r.lead.channel}, {k: 'camp', l: 'Campaign', al: 'l', v: r => r.lead.campaign}, cTxt('status', 'Status')];
 PAGES.bookings = c => {
   const eo = c.eois; const R = c.revenue;
   const wf = [{l: 'EOI', n: eo.filter(x => x.status !== 'Cancelled').length}, {l: 'Booking', n: c.bookings.length}, {l: 'Unit selected', n: c.bookings.filter(B => B.unit && B.unit !== '—').length}, {l: 'Agreement signed', n: R.filter(r => r.agreement === 'Signed').length}, {l: 'Invoice raised', n: R.filter(r => r.invoiceNo).length}, {l: 'Collected', n: R.filter(r => r.collected > 0).length}];
@@ -3246,8 +3255,10 @@ PAGES['booking-list'] = c => frame({title: 'Bookings', desc: 'Confirmed bookings
   body: table('bookings', bkCols(), c.bookings, {lead: r => r.leadId, sort: 'bookingDate', noun: 'bookings', search: r => [r.id, r.lead.name, r.project, r.exec].join(' ')})});
 PAGES['booking-value'] = c => {
   const by = pf('bv.by', 'project'), f = {project: B => B.project, exec: B => secPlain('owner', B.exec), source: B => B.lead.channel, campaign: B => B.lead.campaign, builder: B => B.builder || B.lead.builder}[by];
-  const rows = [...groupBy(c.bookings, f)].map(([k, a]) => ({k, n: a.length, v: sum(a, B => B.value || 0), avg: sum(a, B => B.value || 0) / a.length}));
-  return frame({title: 'Booking value', desc: 'Agreement value of bookings dated in range.', srcs: ['finance'], kpiIds: ['booking_value', 'valued_coverage'],
+  const rows = by === 'exec'
+    ? DB.execs.map(e => { const a = c.bookings.filter(B => B.exec === e || B.owner2 === e), n = sum(a, B => bkShare(B, e)), v = sum(a, B => bkShare(B, e) * (B.value || 0)); return {k: secPlain('owner', e), n, v, avg: n ? v / n : 0}; }).filter(r => r.n)
+    : [...groupBy(c.bookings, f)].map(([k, a]) => ({k, n: a.length, v: sum(a, B => B.value || 0), avg: sum(a, B => B.value || 0) / a.length}));
+  return frame({title: 'Booking value', desc: 'Agreement value of bookings dated in range. Grouped by executive, a booking with an Owner 2 is split between the two owners by its owner share, so the executive rows add up to the total.', srcs: ['finance'], kpiIds: ['booking_value', 'valued_coverage'],
     body: kpiRow(['booking_value', 'valued_coverage'], c, {prev: prevCtx(), cls: 'k2'}) + pageFilters(pfSel('bv.by', 'Group by', [['project', 'Project'], ['exec', 'Executive'], ['source', 'Source'], ['campaign', 'Campaign'], ['builder', 'Builder']], by)) +
       table('bvalue', [cTxt('k', 'Group'), cNum('n', 'Bookings'), cInr('v', 'Booking value', 'booking'), cInr('avg', 'Average', 'booking')], rows, {sort: 'v', noun: 'groups'})});
 };
@@ -3318,7 +3329,7 @@ function misReport(t, c) {
     case 'daily-spend': case 'monthly-marketing': { const st = c.camps.map(x => campStats(x, c)); return {cols: [cTxt('name', 'Campaign'), cTxt('channel', 'Channel'), cTxt('project', 'Project'), cInr('spend', 'Spend', 'spend'), cNum('pl', 'Platform leads'), cNum('crm', 'CRM leads'), cInr('ccpl', 'CRM CPL', 'spend'), cPct('q', 'Q rate'), cNum('bookings', 'Bookings')], rows: st, kpis: ['ad_spend', 'platform_leads', 'crm_matched', 'cpl_crm', 'roas']}; }
     case 'daily-outcome': return {cols: [cTxt('k', 'Current stage'), cNum('n', 'Leads')], rows: [...groupBy(c.cohort, E => E.detail)].map(([k, a]) => ({k, n: a.length})), kpis: ['crm_leads', 'untouched_pct', 'never_called_pct']};
     case 'weekly': case 'monthly-crm': return kv(['crm_leads', 'qualified', 'lead_qual_rate', 'untouched_pct', 'never_called_pct', 'response_sla_pct', 'visits_done', 'site_visit_rate', 'bookings', 'booked_cohort', 'booking_value', 'revenue', 'ad_spend', 'cpl_crm', 'marketing_pct']);
-    case 'executive': return {cols: [cTxt('e', 'Executive'), cNum('assigned', 'Assigned'), cPct('never', 'Never called'), {k: 'medResp', l: 'Median response', v: r => r.medResp, f: r => dur(r.medResp)}, cNum('vdone', 'Visits'), cNum('bookings', 'Bookings'), cInr('value', 'Value', 'booking')], rows: DB.execs.map(e => execRow(e, c)).filter(r => r.assigned), kpis: ['response_sla_pct', 'never_called_pct', 'bookings']};
+    case 'executive': return {cols: [cTxt('e', 'Executive'), cNum('assigned', 'Assigned'), cPct('never', 'Never called'), {k: 'medResp', l: 'Median response', v: r => r.medResp, f: r => dur(r.medResp)}, cNum('vdone', 'Visits'), cNum('bookings', 'Bookings (primary owner)'), {k: 'bkCredit', l: 'Credited bookings', al: 'r', v: r => r.bkCredit, f: r => (Math.round(r.bkCredit * 10) / 10).toString()}, cInr('value', 'Value (primary owner)', 'booking'), cInr('valCredit', 'Credited value', 'booking')], rows: DB.execs.map(e => execRow(e, c)).filter(r => r.assigned || r.bkCredit), kpis: ['response_sla_pct', 'never_called_pct', 'bookings']};
     case 'project': return {cols: projCols().slice(0, 12), rows: DB.projects.map(p => projRow(p, c)), kpis: ['crm_leads', 'bookings', 'revenue']};
     case 'site-visit': return {cols: visitCols().filter(x => ['id', 'name', 'exec', 'projects', 'type', 'status', 'plannedAt', 'outcome'].includes(x.k)), rows: c.visits.filter(V => c.inR(V.plannedAt) || c.inR(V.completedAt)), kpis: ['visits_done', 'no_show_pct', 'visit_to_book']};
     case 'bookings': return {cols: bkCols(), rows: c.bookings, kpis: ['bookings', 'booking_value', 'valued_coverage']};

@@ -61,3 +61,12 @@ Evidence format: screen, date, category (Observed/Documented/Inferred), limitati
 ## 7. Added after the first pass
 - Lead drawer: follow-up tasks and notes (type, due date, mark done, overdue state) stored in localStorage only; timeline includes them. Simulated: not shared, not synced, not audited server-side. Tested: add, overdue, complete, persists after reload, invalid date rejected.
 - `site/index.html`: original EstateAI marketing page (own branding and copy; demo form opens a mailto, no server). Checked at 1280px and 390px, no horizontal scroll, no page errors.
+
+## 8. Owner 2 attribution (Proposed rule, synthetic data)
+Observed: LeadSquared's Booking Complete and Site Visit Complete activities carry an "Owner 2" field. How it is used in reports is Unavailable, so the rule below is an EstateAI design decision to confirm with you.
+- Each booking has `owner2` (optional, must differ from the primary owner) and `ownerShare` (primary owner's %, 1-99; 100 when there is no Owner 2).
+- Credited bookings / value for executive e = sum over bookings of share(e) x (1 or agreement value). Shares of a booking add to 100 %, so executive rows reconcile to the unique total.
+- Unique-count KPIs (`bookings`, `booking_value`) are unchanged and count each booking once. Executive report shows both "primary owner" and "credited" columns.
+- Booking list shows Owner 2 and their %. Data-quality checks: Owner 2 = primary owner; invalid split.
+- Not done: Owner 2 on site visits and payouts, editing a split in the UI, manager/team rollups of credited figures.
+- Tested (headless Chromium, 42 sample bookings, 7 with Owner 2): credits sum to 42, no same-owner cases, new columns and pages render, no page errors. Untested: date-range filtering of credited figures, role masking of Owner 2.
