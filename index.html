@@ -303,7 +303,7 @@ a{color:var(--accent);}
 .score2{text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px;} .score2 b{font-size:26px;color:var(--accent);line-height:1;}
 .kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px 12px;margin:14px 0 0;font-size:13px;} .kv dt{color:var(--text-dim);} .kv dd{margin:0;overflow-wrap:anywhere;}
 .kv.wide{grid-template-columns:minmax(120px,180px) minmax(0,1fr);}
-.fu{list-style:none;padding:0;margin:0 0 8px;} .fu li{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--hair);font-size:12.5px;} .fu-form{display:flex;gap:6px;flex-wrap:wrap;} .fu-form input[type=text]{flex:1;min-width:140px;}
+.fu{list-style:none;padding:0;margin:0 0 8px;} .fu li{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--hair);font-size:12.5px;} .fu-form{display:flex;gap:6px;flex-wrap:wrap;} .fu-form input[type=text]{flex:1;min-width:140px;} .o2f{align-items:center;margin-bottom:6px;} .o2f input[type=number]{width:70px;}
 .tl{list-style:none;padding:0;margin:0;border-left:2px solid var(--border);} .tl li{display:flex;justify-content:space-between;gap:10px;padding:4px 0 4px 12px;position:relative;font-size:12.5px;}
 .tl li::before{content:"";position:absolute;left:-5px;top:10px;width:8px;height:8px;border-radius:50%;background:var(--accent);}
 .nlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;font-size:13px;} .nlist li{padding:8px 10px;border:1px solid var(--border);border-radius:8px;line-height:1.5;} .nlist li.read{opacity:.6;}
@@ -2473,6 +2473,27 @@ ACTIONS_LATE.taskdone = t => {
   const list = store.get('tasks', []), x = list.find(y => y.id === t.dataset.id); if (!x) return;
   x.done = true; x.doneAt = DB.NOW; store.set('tasks', list); audit('Follow-up', 'Task completed (simulated, local)', '', t.dataset.lead); openLead(t.dataset.lead);
 };
+/* Owner 2 edits: kept in this browser's localStorage and re-applied to the sample data on load (simulated; not shared, not synced). */
+function applyO2Edits() {
+  const ed = store.get('o2', {});
+  for (const [k, v] of Object.entries(ed)) { const [kind, id] = k.split(':'); const rec = (kind === 'B' ? DB.bookings : DB.visits).find(x => x.id === id); if (rec) { rec.owner2 = v.owner2; rec.ownerShare = v.ownerShare; } }
+}
+const o2Pool = rec => DB.users.filter(u => u.role === 'sales_exec' && u.name !== rec.exec);
+function o2Html(kind, rec, label) {
+  const sel = rec.owner2 || '';
+  return `<div class="fu-form o2f" data-kind="${kind}" data-id="${esc(rec.id)}"><b>${esc(label)} ${esc(rec.id)}</b><select aria-label="Owner 2 for ${esc(rec.id)}"><option value="">No Owner 2</option>${o2Pool(rec).map(u => `<option${u.name === sel ? ' selected' : ''}>${esc(u.name)}</option>`).join('')}</select><label>Owner 1 share % <input type="number" min="1" max="99" value="${rec.owner2 ? rec.ownerShare : 100}" aria-label="Primary owner share percent"></label><button type="button" class="btn sm" data-act="o2save">Save</button></div>`;
+}
+ACTIONS_LATE.o2save = t => {
+  const f = t.closest('.o2f'), kind = f.dataset.kind, id = f.dataset.id, rec = (kind === 'B' ? DB.bookings : DB.visits).find(x => x.id === id); if (!rec) return;
+  const o2 = f.querySelector('select').value || null, sh = Math.round(+f.querySelector('input').value);
+  if (o2 && o2 === rec.exec) { flash(t, 'Must differ from owner'); return; }
+  if (o2 && !(sh >= 1 && sh <= 99)) { flash(t, 'Share must be 1–99'); return; }
+  const prev = rec.owner2 ? `${rec.owner2} (${100 - rec.ownerShare}%)` : 'none';
+  rec.owner2 = o2; rec.ownerShare = o2 ? sh : 100;
+  const ed = store.get('o2', {}); ed[kind + ':' + id] = {owner2: rec.owner2, ownerShare: rec.ownerShare}; store.set('o2', ed);
+  audit((kind === 'B' ? 'Booking ' : 'Visit ') + id, 'Owner 2 changed (simulated, local)', prev, o2 ? `${o2} (${100 - rec.ownerShare}%)` : 'none');
+  CTX_CACHE.clear(); DQ_CACHE = null; openLead(rec.leadId); rerender();
+};
 function openLead(id) {
   const E = DB.byId.get(id); if (!E) return;
   const t = [['Captured', E.createdAt], ['Assigned', E.assignedAt], ['First activity', E.firstActAt], ['First human call', E.firstHumanCallAt], ...E.visits.map(V => [`${V.seq} · ${V.status}`, V.completedAt || V.plannedAt]),
@@ -2488,6 +2509,7 @@ function openLead(id) {
     <h4>Recommended next action</h4><div class="action-box"><b>${esc(E.action.title)}.</b> ${esc(E.action.reason || '')}</div>
     ${E.opener ? `<h4>Suggested opener</h4><textarea id="opener" rows="4">${esc(E.opener)}</textarea><div class="row-btns"><button class="btn sm" type="button" data-copyop>Copy opener</button></div>` : ''}` : ''}
     ${E.notes ? `<h4>Latest note</h4><p class="note">“${esc(E.notes)}”</p>` : ''}
+    ${(E.booking && E.booking.status !== 'Cancelled' || E.visits.some(V => V.status === 'Completed')) ? `<h4>Owner 2 credit <span class="muted">(saved in this browser only)</span></h4>${E.booking && E.booking.status !== 'Cancelled' ? o2Html('B', E.booking, 'Booking') : ''}${E.visits.filter(V => V.status === 'Completed').map(V => o2Html('V', V, 'Visit')).join('')}` : ''}
     ${followUpHtml(id)}
     <h4>Timeline</h4><ol class="tl">${t.map(([l, ts]) => `<li><span>${esc(l)}</span><span class="muted">${fmtDT(ts)}</span></li>`).join('')}</ol>
     ${wa.length ? `<h4>WhatsApp alert to owner</h4><p>${wa.map(w => w.failed ? 'Failed' : [w.delivered && 'Delivered', w.read && 'Read', w.clicked && 'Clicked', w.replied && 'Replied'].filter(Boolean).join(' → ')).join('; ')}</p>` : ''}`, 'Lead');
@@ -2580,7 +2602,7 @@ function switchWs(ws) {
 }
 /* ---------------- boot ---------------- */
 function rebuild() {
-  try { DB = buildDB(); DB.stamp = Date.now(); DB.minCreated = Math.min(...DB.leads.map(E => E.createdAt).filter(x => x != null)); CTX_CACHE.clear(); DQ_CACHE = null; }
+  try { DB = buildDB(); applyO2Edits(); DB.stamp = Date.now(); DB.minCreated = Math.min(...DB.leads.map(E => E.createdAt).filter(x => x != null)); CTX_CACHE.clear(); DQ_CACHE = null; }
   catch (e) { console.error(e); $('#view').innerHTML = errorState('Lead data could not be loaded. ' + (e.message || ''), e.ref || 'DATA-CRM-204'); return false; }
   const F0 = {preset: DEFAULT_PRESET, from: '', to: ''}; FILTER_KEYS.forEach(k => { F0[k] = ''; });
   APP.F = Object.assign(F0, store.get('filters', {}));
@@ -3109,17 +3131,17 @@ PAGES['manager-360'] = c => {
   const capRows = rows.map(r => { const u = DB.users.find(x => x.name === r.e) || {}; return {label: secPlain('owner', r.e), v: r.open, sub: u.status === 'On leave' ? 'On leave' : 'cap ' + (u.cap || '—') + '/day'}; }).sort((a, b) => b.v - a.v);
   return frame({title: 'Manager 360' + (mg ? ' · ' + mg : ''), desc: mg ? 'Your team at a glance: workload, SLA, visits, bookings, churn and who needs help.' : 'All teams. Pick a manager in the filter bar to focus on one team.', srcs: ['leadsquared', 'telephony', 'whatsapp', 'finance'], kpiIds: ['never_called_pct', 'untouched_pct', 'visits_done', 'bookings', 'booking_value'],
     body: statRow([statCard('Team leads (range)', nIN(tot('assigned')), nIN(rows.length) + ' executives'), statCard('Open now', nIN(tot('open')), ''), statCard('Past SLA', nIN(tot('past')), 'Now', tot('past') ? 'SLA BREACH' : 'GOOD'), statCard('Never called', pctS(pctOf(sum(rows, r => r.never * r.assigned / 100), tot('assigned')), 0), 'Assigned leads', null),
-      statCard('Visits done', nIN(tot('vdone')), 'In range'), statCard('Bookings', nIN(tot('bookings')), 'In range'), statCard('Booking value', sec('booking', tot('value'), inr), 'In range'), statCard('Churn in / out', nIN(tot('chIn')) + ' / ' + nIN(tot('chOut')), 'In range')]) +
+      statCard('Visits done', nIN(tot('vdone')), 'In range'), statCard('Bookings', nIN(tot('bookings')), 'In range'), statCard('Booking value', sec('booking', tot('value'), inr), 'In range'), statCard('Credited bookings', (Math.round(tot('bkCredit') * 10) / 10).toString(), 'Owner 1 + Owner 2 shares'), statCard('Credited value', sec('booking', tot('valCredit'), inr), 'Owner 1 + Owner 2 shares'), statCard('Churn in / out', nIN(tot('chIn')) + ' / ' + nIN(tot('chOut')), 'In range')]) +
       grid2(section('Top performers', table('m-top', [{k: 'e', l: 'Executive', al: 'l', f: r => sec('owner', r.e), csv: r => r.e}, cNum('bookings', 'Bookings'), cNum('vdone', 'Visits'), cInr('value', 'Value', 'booking')], top, {ps: 5, noun: 'executives'})),
         section('Needs attention', att.length ? table('m-att', [{k: 'e', l: 'Executive', al: 'l', f: r => `<a href="#executive-360" data-go="executive-360" data-patch='${esc(JSON.stringify({exec: r.e}))}'>${sec('owner', r.e)}</a>`, csv: r => r.e}, cNum('past', 'Past SLA'), cPct('never', 'Never called'), cPct('untouched', 'Untouched')], att, {ps: 5, noun: 'executives'}) : emptyState('Nobody crosses an alert threshold.'))) +
       section('Capacity: open leads per executive', hbars(capRows), {span: true}) +
-      section('Team table', table('m-team', [{k: 'e', l: 'Executive', al: 'l', f: r => `<a href="#executive-360" data-go="executive-360" data-patch='${esc(JSON.stringify({exec: r.e}))}'>${sec('owner', r.e)}</a>`, csv: r => r.e}, cTxt('team', 'Team'), cNum('assigned', 'Assigned'), cNum('open', 'Open'), cNum('past', 'Past SLA'), {k: 'medResp', l: 'Median response', v: r => r.medResp, f: r => dur(r.medResp)}, cPct('never', 'Never called'), cPct('untouched', 'Untouched'), cNum('vdone', 'Visits'), cPct('v2b', 'Visit → book'), cNum('bookings', 'Bookings'), cInr('value', 'Value', 'booking'), cNum('chIn', 'Churn in'), cNum('chOut', 'Churn out')], rows, {sort: 'assigned', noun: 'executives'}), {span: true})});
+      section('Team table', table('m-team', [{k: 'e', l: 'Executive', al: 'l', f: r => `<a href="#executive-360" data-go="executive-360" data-patch='${esc(JSON.stringify({exec: r.e}))}'>${sec('owner', r.e)}</a>`, csv: r => r.e}, cTxt('team', 'Team'), cNum('assigned', 'Assigned'), cNum('open', 'Open'), cNum('past', 'Past SLA'), {k: 'medResp', l: 'Median response', v: r => r.medResp, f: r => dur(r.medResp)}, cPct('never', 'Never called'), cPct('untouched', 'Untouched'), cNum('vdone', 'Visits'), cPct('v2b', 'Visit → book'), cNum('bookings', 'Bookings'), {k: 'bkCredit', l: 'Credited bookings', al: 'r', v: r => r.bkCredit, f: r => (Math.round(r.bkCredit * 10) / 10).toString()}, cInr('value', 'Value', 'booking'), cInr('valCredit', 'Credited value', 'booking'), cNum('chIn', 'Churn in'), cNum('chOut', 'Churn out')], rows, {sort: 'assigned', noun: 'executives'}), {span: true})});
 };
 function teamTable(c, title, desc) {
   const rows = DB.teams.filter(t => t !== 'Not set').map(t => { const ex = DB.execs.filter(e => DB.teamOfExec.get(e) === t); const rs = ex.map(e => execRow(e, c)); const a = c.cohort.filter(E => E.team === t), g = leadAgg(a);
-    return {t, mgr: (DB.leads.find(E => E.team === t) || {}).manager || '—', execs: ex.length, leads: a.length, open: sum(rs, r => r.open), past: sum(rs, r => r.past), sla: pctOf(g.sla, g.ak), q: pctOf(g.qual, g.n), vdone: sum(rs, r => r.vdone), bookings: sum(rs, r => r.bookings), value: sum(rs, r => r.value), rev: sum(rs, r => r.rev)}; });
+    return {t, mgr: (DB.leads.find(E => E.team === t) || {}).manager || '—', execs: ex.length, leads: a.length, open: sum(rs, r => r.open), past: sum(rs, r => r.past), sla: pctOf(g.sla, g.ak), q: pctOf(g.qual, g.n), vdone: sum(rs, r => r.vdone), bookings: sum(rs, r => r.bookings), bkCredit: sum(rs, r => r.bkCredit), vdCredit: sum(rs, r => r.vdCredit), value: sum(rs, r => r.value), valCredit: sum(rs, r => r.valCredit), rev: sum(rs, r => r.rev)}; });
   return frame({title, desc, srcs: ['leadsquared', 'finance'], kpiIds: ['response_sla_pct', 'lead_qual_rate', 'visits_done', 'bookings', 'booking_value', 'revenue'],
-    body: table('teams', [cTxt('t', 'Team'), cTxt('mgr', 'Manager'), cNum('execs', 'Executives'), cNum('leads', 'Leads'), cNum('open', 'Open'), cNum('past', 'Past SLA'), cPct('sla', 'Response SLA'), cPct('q', 'Q rate'), cNum('vdone', 'Visits'), cNum('bookings', 'Bookings'), cInr('value', 'Booking value', 'booking'), cInr('rev', 'Revenue', 'revenue')], rows, {sort: 'leads', noun: 'teams'})});
+    body: table('teams', [cTxt('t', 'Team'), cTxt('mgr', 'Manager'), cNum('execs', 'Executives'), cNum('leads', 'Leads'), cNum('open', 'Open'), cNum('past', 'Past SLA'), cPct('sla', 'Response SLA'), cPct('q', 'Q rate'), cNum('vdone', 'Visits'), {k: 'vdCredit', l: 'Credited visits', al: 'r', v: r => r.vdCredit, f: r => (Math.round(r.vdCredit * 10) / 10).toString()}, cNum('bookings', 'Bookings'), {k: 'bkCredit', l: 'Credited bookings', al: 'r', v: r => r.bkCredit, f: r => (Math.round(r.bkCredit * 10) / 10).toString()}, cInr('value', 'Booking value', 'booking'), cInr('valCredit', 'Credited booking value', 'booking'), cInr('rev', 'Revenue', 'revenue')], rows, {sort: 'leads', noun: 'teams'})});
 }
 PAGES['team-performance'] = c => teamTable(c, 'Team performance', 'Each team side by side for the selected range.');
 PAGES['sales-groups'] = c => teamTable(c, 'Sales groups', 'Sales groups map to CRM teams in this workspace. Group heads see every team.');
