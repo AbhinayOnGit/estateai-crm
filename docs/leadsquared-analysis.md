@@ -81,3 +81,10 @@ Observed: Site Visit Complete has an "Owner 2" field (and Verified For Payout / 
 - Tested (headless Chromium, 142 completed sample visits, 10 with Owner 2): credited visits sum to 142; credited payout cost equals total payout (Rs 117,000); no same-owner cases; no Owner 2 on non-completed visits; pages render with no errors.
 - Untested: date-range filtering of credited figures, role masking of Owner 2, visit-to-booking conversion by credited owner.
 - Not done: editing a split in the UI, manager/team rollups, payout verification rule (still your decision).
+
+## 10. Credited rollups and Owner 2 editing (Proposed rule, synthetic data)
+- Team performance / Sales groups: new "Credited visits", "Credited bookings", "Credited booking value" columns. Manager 360: "Credited bookings" and "Credited value" cards plus team-table columns. A team's credited figures include shares of bookings whose primary owner is in another team, so team rows add up to the all-teams total, not to each team's own unique counts.
+- Lead drawer: "Owner 2 credit" section for the lead's booking and each completed visit. Pick Owner 2 and the primary owner's share (1-99 %), Save. Rejected: Owner 2 equal to the primary owner; share outside 1-99. Edits are saved in this browser's localStorage and re-applied to the sample data on load; each edit is written to the session audit log. Simulated: not shared between users, not synced to any CRM, not server-enforced, and role permissions do not restrict who can edit.
+- Tested (headless Chromium): team and manager pages show the new columns; invalid share rejected; valid edit saved, persisted after reload, shown as the Owner 2 percentage in the bookings list; no page errors.
+- Untested: displayed team credited totals summed against the unique total on screen; date-range filtering; role masking; editing a visit (booking path tested); clearing Owner 2 through the UI.
+- Still open: payout verification rule (needs your decision) and the browser-session inspection of LeadSquared (needs you to sign in).
