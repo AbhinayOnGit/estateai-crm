@@ -2460,21 +2460,24 @@ function renderSearchDrop(q) {
 function drawer(html, title) { $('#drawerTitle').textContent = title || ''; $('#drawerBody').innerHTML = html; $('#drawer').hidden = false; $('#scrim').hidden = false; $('#drawerClose').focus(); }
 function closeDrawer() { $('#drawer').hidden = true; $('#scrim').hidden = true; }
 /* Follow-up tasks and notes: stored in this browser's localStorage only (simulated; not synced to any CRM, not shared between users). */
-const TASK_TYPES = ['Call', 'WhatsApp', 'Meeting', 'Site visit', 'Other'];
+/* Task types, priority 1-5 (optional), reminder 15/30/45/60 min and Meeting needing a location mirror the task-type configuration observed in the reference CRM (Observed 2026-10-18, configuration only). */
+const TASK_TYPES = ['Follow-Up Call', 'Phone Call', 'Follow-Up', 'Meeting', 'Site Visit'];
 const leadTasks = id => store.get('tasks', []).filter(x => x.leadId === id);
 const taskState = (x, now) => x.done ? 'Done' : x.due < now ? 'Overdue' : 'Open';
 function followUpHtml(id) {
   const now = DB.NOW, list = leadTasks(id).sort((a, b) => a.due - b.due);
   const day = ms => new Date(ms + 330 * MIN).toISOString().slice(0, 10);
   return `<h4>Follow-ups &amp; notes <span class="muted">(saved in this browser only)</span></h4>
-    <ul class="fu">${list.map(x => `<li><span><b>${esc(x.type)}</b> · due ${fmtDT(x.due)} ${pill(taskState(x, now) === 'Overdue' ? 'CRITICAL' : taskState(x, now) === 'Done' ? 'HEALTHY' : 'INFO', taskState(x, now))}${x.text ? '<br><span class="muted">' + esc(x.text) + '</span>' : ''}</span>${x.done ? '' : `<button type="button" class="btn xs" data-act="taskdone" data-id="${esc(x.id)}" data-lead="${esc(id)}">Mark done</button>`}</li>`).join('') || '<li class="muted">No follow-ups yet.</li>'}</ul>
-    <div class="fu-form" data-lead-id="${esc(id)}"><select id="fuType" aria-label="Task type">${TASK_TYPES.map(t => `<option>${t}</option>`).join('')}</select><input id="fuDue" type="date" aria-label="Due date" value="${day(now + DAY)}"><input id="fuText" type="text" maxlength="200" placeholder="Note (do not enter real customer data in the showcase)" aria-label="Note"><button type="button" class="btn sm" data-act="taskadd" data-lead="${esc(id)}">Add</button></div>`;
+    <ul class="fu">${list.map(x => `<li><span><b>${esc(x.type)}</b>${x.priority ? ' · P' + x.priority : ''} · due ${fmtDT(x.due)}${x.reminder ? ' · remind ' + x.reminder + ' min before' : ''}${x.location ? ' · ' + esc(x.location) : ''} ${pill(taskState(x, now) === 'Overdue' ? 'CRITICAL' : taskState(x, now) === 'Done' ? 'HEALTHY' : 'INFO', taskState(x, now))}${x.text ? '<br><span class="muted">' + esc(x.text) + '</span>' : ''}</span>${x.done ? '' : `<button type="button" class="btn xs" data-act="taskdone" data-id="${esc(x.id)}" data-lead="${esc(id)}">Mark done</button>`}</li>`).join('') || '<li class="muted">No follow-ups yet.</li>'}</ul>
+    <div class="fu-form" data-lead-id="${esc(id)}"><select id="fuType" aria-label="Task type">${TASK_TYPES.map(t => `<option>${t}</option>`).join('')}</select><input id="fuDue" type="date" aria-label="Due date" value="${day(now + DAY)}"><select id="fuPri" aria-label="Priority"><option value="">Priority</option>${[1, 2, 3, 4, 5].map(n => `<option>${n}</option>`).join('')}</select><select id="fuRem" aria-label="Reminder"><option value="">No reminder</option>${[15, 30, 45, 60].map(n => `<option value="${n}">${n} min</option>`).join('')}</select><input id="fuLoc" type="text" maxlength="80" placeholder="Location (required for Meeting)" aria-label="Location"><input id="fuText" type="text" maxlength="200" placeholder="Note (do not enter real customer data in the showcase)" aria-label="Note"><button type="button" class="btn sm" data-act="taskadd" data-lead="${esc(id)}">Add</button></div>`;
 }
 ACTIONS_LATE.taskadd = t => {
   const id = t.dataset.lead, due = $('#fuDue').value, text = $('#fuText').value.trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) { flash(t, 'Pick a due date'); return; }
+  const type = $('#fuType').value, loc = $('#fuLoc').value.trim();
+  if (type === 'Meeting' && !loc) { flash(t, 'Meeting needs a location'); return; }
   const list = store.get('tasks', []);
-  list.push({id: 't' + Date.now().toString(36) + list.length, leadId: id, type: $('#fuType').value, due: Date.parse(due + 'T18:00:00+05:30'), text, done: false, createdAt: DB.NOW});
+  list.push({id: 't' + Date.now().toString(36) + list.length, leadId: id, type, due: Date.parse(due + 'T18:00:00+05:30'), text, priority: +$('#fuPri').value || null, reminder: +$('#fuRem').value || null, location: loc || null, done: false, createdAt: DB.NOW});
   store.set('tasks', list); audit('Follow-up', 'Task added (simulated, local)', '', id); openLead(id);
 };
 ACTIONS_LATE.taskdone = t => {
