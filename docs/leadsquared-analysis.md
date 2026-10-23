@@ -114,3 +114,19 @@ Method: read-only `get_users` MCP call. Only role, status and group-membership c
 
 ## 14. Still Unavailable (needs you signed in to LeadSquared in a browser)
 Report formulas (numerator, denominator, date field, timezone, owner-at-event vs current owner), what each role can see or edit, how Owner 2 is used in reports, and whether Verified For Payout gates payment. The API exposes none of these and this session has no browser tool, so sections 8 to 12 stay Proposed. The roles permission matrix is likewise Unverified.
+## 13. Connector inspection, 2026-10-18 (read-only, aggregates only)
+Calls: `get_users` (aggregated by role/status, no names or emails kept), `get_list_of_task_types` (configuration only). No lead, activity or report data read; nothing written. The browser session itself was not accessible from this environment, so screens, reports and role permissions remain Unavailable.
+
+**Observed**
+- Users: 2,664 total. Roles: Sales_User 2,636; Marketing_User 18; Administrator 9; Sales_Manager 1. StatusCode 1 = 1,979, 0 = 685 (meaning of the codes is Inferred as active / inactive). The user list has no team or manager field, so the sales hierarchy is not expressed through roles here; where it lives is Unavailable.
+- Task types configured: Follow-Up, Meeting, Phone Call, Follow-Up Call (the default), Site Visit.
+- Task fields: Owner, Associated Lead, Subject and Schedule (mandatory); Organizer (mandatory); Location, End date, Reminder (15/30/45/60 min), Description, Priority (1-5), Effort estimate, % complete, one custom field (optional).
+- Meeting makes Location mandatory; the other types leave it optional or off. Meeting, Follow-Up Call and Site Visit send calendar invites to organiser, owner and lead; Follow-Up and Phone Call do not.
+- Task completion tracking and business-workflow status are disabled on all types. Timers are enabled for Follow-Up, Meeting, Follow-Up Call, Site Visit.
+
+**Implications (Proposed)**
+- EstateAI's 13 roles are its own design; the reference account runs on four roles, so role-level parity is not a goal.
+- EstateAI follow-up tasks now use the observed type names, optional priority 1-5, reminder 15/30/45/60 min, and a location that is required for Meeting. Calendar invites and timers are not built.
+- Owner 2 and payout verification rules remain Proposed; none of this inspection confirms them.
+
+**Still Unavailable:** screens, saved views, report definitions and their numerators/denominators, role permissions, and how the sales hierarchy and assignment rules are configured.
